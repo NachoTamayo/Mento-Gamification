@@ -81,5 +81,5 @@ jobs:
           script: |
             APP_DIR="${{ secrets.APP_DIR }}"
             pm2 start "$APP_DIR/ecosystem.config.js" || true
-            pm2 reload miapp
+            pm2 reload Gamification
             pm2 save
