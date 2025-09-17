@@ -12,31 +12,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Subimos SOLO el código (sin node_modules, sin .git)
-      - name: Rsync code to server (supports key or password)
+      # (opcional) Preflight para ver el modo de autenticación que se usará (no imprime secretos)
+      - name: Preflight (detect auth mode)
+        run: |
+          if [ -n "${{ secrets.SSH_PASSWORD }}" ]; then
+            echo "Auth mode: password"
+          elif [ -n "${{ secrets.SSH_KEY }}" ]; then
+            echo "Auth mode: key"
+          else
+            echo "No SSH_PASSWORD or SSH_KEY provided"
+          fi
+
+      # Rsync que soporta password (sshpass) o clave privada
+      - name: Rsync code to server (robust)
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
           APP_DIR: ${{ secrets.APP_DIR }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
+
           mkdir -p ~/.ssh
           DEST="${APP_DIR}/releases/${RUN_NUMBER}"
           EXCLUDES=(--exclude ".git" --exclude ".github" --exclude "node_modules" --exclude ".env" --exclude "*.env" --exclude "config_game.json")
-                    if echo "$SSH_KEY" | head -n1 | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
-            echo "$SSH_KEY" > ~/.ssh/id_deploy
+
+          PASSWORD="${{ secrets.SSH_PASSWORD }}"
+          KEY="${{ secrets.SSH_KEY }}"
+
+          if [ -n "$PASSWORD" ]; then
+            echo "Using password auth"
+            sudo apt-get update >/dev/null 2>&1 || true
+            sudo apt-get install -y sshpass rsync >/dev/null 2>&1
+            RSYNC_RSH="sshpass -p $PASSWORD ssh -o StrictHostKeyChecking=no -p ${SSH_PORT}"
+            rsync -avz --delete "${EXCLUDES[@]}" -e "$RSYNC_RSH" \
+              . "${SSH_USER}@${SSH_HOST}:${DEST}"
+          elif echo "$KEY" | head -n1 | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
+            echo "Using key auth"
+            echo "$KEY" > ~/.ssh/id_deploy
             chmod 600 ~/.ssh/id_deploy
             rsync -avz --delete "${EXCLUDES[@]}" \
               -e "ssh -i ~/.ssh/id_deploy -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
-              . "${SSH_USER}@${SSH_HOST}:${DEST}"
-          elif [ -n "${SSH_PASSWORD:-}" ]; then
-            sudo apt-get update && sudo apt-get install -y sshpass rsync
-            RSYNC_RSH="sshpass -p ${SSH_PASSWORD} ssh -o StrictHostKeyChecking=no -p ${SSH_PORT}"
-            rsync -avz --delete "${EXCLUDES[@]}" -e "$RSYNC_RSH" \
               . "${SSH_USER}@${SSH_HOST}:${DEST}"
           else
             echo "❌ Neither a valid SSH_KEY nor SSH_PASSWORD was provided." >&2
@@ -49,23 +66,27 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key: ${{ secrets.SSH_KEY }}
+          # permitimos password (tu caso); si más adelante pasas a clave, añade key: ${{ secrets.SSH_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script: |
             set -e
             APP_DIR="${{ secrets.APP_DIR }}"
             RELEASE_DIR="$APP_DIR/releases/${{ github.run_number }}"
             CURRENT_LINK="$APP_DIR/current"
 
-            # Enlaza los secretos desde shared/ a la release
+            # Enlaza secretos mantenidos en el servidor
             ln -sfn "$APP_DIR/config/config_game.json" "$RELEASE_DIR/config_game.json"
             if [ -f "$APP_DIR/config/.env" ]; then
               ln -sfn "$APP_DIR/config/.env" "$RELEASE_DIR/.env"
             fi
 
             cd "$RELEASE_DIR"
-            # Instala dependencias y construye en el servidor
             npm ci --omit=dev
-            npm start
+
+            # Ejecuta build SOLO si existe el script build en package.json
+            if node -e 'try{const p=require("./package.json"); process.exit(!(p.scripts && p.scripts.build)); }catch(e){process.exit(1)}'; then
+              npm run build
+            fi
 
             # Apunta current a la nueva release (atómico)
             ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
@@ -76,9 +97,9 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key: ${{ secrets.SSH_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script: |
             APP_DIR="${{ secrets.APP_DIR }}"
             pm2 start "$APP_DIR/ecosystem.config.js" || true
-            pm2 reload Gamification
+            pm2 reload Gamification || pm2 restart Gamification
             pm2 save
