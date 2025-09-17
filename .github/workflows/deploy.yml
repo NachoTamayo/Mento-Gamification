@@ -21,8 +21,8 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Start
+        run: npm start
 
       # Si compilas en CI: excluye node_modules si no hacen falta en servidor o si usas "npm ci" allí.
       # Empaquetar y subir vía rsync o scp al servidor:
