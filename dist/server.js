@@ -1,6 +1,5 @@
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const axios = require("axios");
-const FormData = require("form-data");
 const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
