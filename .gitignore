@@ -1,3 +1,4 @@
 .log
 config_game.json
 *.php
+node_modules/

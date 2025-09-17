@@ -1,0 +1,85 @@
+name: Deploy to Vultr
+
+on:
+  push:
+    branches: ["main"] # cambia la rama si quieres
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # (Opcional) Construir en CI y subir artefacto compilado para acelerar el servidor:
+      - name: Use Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Si compilas en CI: excluye node_modules si no hacen falta en servidor o si usas "npm ci" allí.
+      # Empaquetar y subir vía rsync o scp al servidor:
+      - name: Sync files to server
+        uses: burnett01/rsync-deployments@6.0.0
+        with:
+          switches: -avz --delete --exclude=".git" --exclude=".github" --exclude="node_modules"
+          path: .
+          remote_path: ${{ secrets.APP_DIR }}/releases/${{ github.run_number }}
+          remote_host: ${{ secrets.SSH_HOST }}
+          remote_user: ${{ secrets.SSH_USER }}
+          remote_port: ${{ secrets.SSH_PORT }}
+          remote_key: ${{ secrets.SSH_KEY }}
+
+      # Crear/actualizar symlink "current" a la nueva release y preparar dependencias
+      - name: Activate release & install deps on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR }}"
+            RELEASE_DIR="$APP_DIR/releases/${{ github.run_number }}"
+            CURRENT_LINK="$APP_DIR/current"
+            ENV_FILE="$APP_DIR/.env"
+
+            # Copia .env a la nueva release (si existe)
+            if [ -f "$ENV_FILE" ]; then
+              cp "$ENV_FILE" "$RELEASE_DIR/.env"
+            fi
+
+            # Instalar dependencias en el servidor (si no construyes todo en CI):
+            cd "$RELEASE_DIR"
+            npm ci --omit=dev
+
+            # Si tu build se hace en el servidor (en vez de CI), descomenta:
+            # npm run build
+
+            # Crear/actualizar symlink atómico
+            ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
+
+            # Asegurar permisos
+            chown -R $USER:$USER "$APP_DIR"
+
+      # Recargar PM2 sin downtime
+      - name: Reload PM2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            APP_DIR="${{ secrets.APP_DIR }}"
+            pm2 start "$APP_DIR/ecosystem.config.js" || true
+            pm2 reload miapp
+            pm2 save
