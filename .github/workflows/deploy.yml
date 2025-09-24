@@ -1,105 +1,49 @@
-name: Deploy to Vultr
+name: Deploy to Vultr (PM2)
 
 on:
   push:
     branches: ["main"]
 
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
 jobs:
   deploy:
+    environment: prod
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # (opcional) Preflight para ver el modo de autenticación que se usará (no imprime secretos)
-      - name: Preflight (detect auth mode)
+      - name: Check SSH_KEY present
         run: |
-          if [ -n "${{ secrets.SSH_PASSWORD }}" ]; then
-            echo "Auth mode: password"
-          elif [ -n "${{ secrets.SSH_KEY }}" ]; then
-            echo "Auth mode: key"
-          else
-            echo "No SSH_PASSWORD or SSH_KEY provided"
-          fi
-
-      # Rsync que soporta password (sshpass) o clave privada
-      - name: Rsync code to server (robust)
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          APP_DIR: ${{ secrets.APP_DIR }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -euo pipefail
-
-          mkdir -p ~/.ssh
-          DEST="${APP_DIR}/releases/${RUN_NUMBER}"
-          EXCLUDES=(--exclude ".git" --exclude ".github" --exclude "node_modules" --exclude ".env" --exclude "*.env" --exclude "config_game.json")
-
-          PASSWORD="${{ secrets.SSH_PASSWORD }}"
-          KEY="${{ secrets.SSH_KEY }}"
-
-          if [ -n "$PASSWORD" ]; then
-            echo "Using password auth"
-            sudo apt-get update >/dev/null 2>&1 || true
-            sudo apt-get install -y sshpass rsync >/dev/null 2>&1
-            RSYNC_RSH="sshpass -p $PASSWORD ssh -o StrictHostKeyChecking=no -p ${SSH_PORT}"
-            rsync -avz --delete "${EXCLUDES[@]}" -e "$RSYNC_RSH" \
-              . "${SSH_USER}@${SSH_HOST}:${DEST}"
-          elif echo "$KEY" | head -n1 | grep -q "BEGIN OPENSSH PRIVATE KEY"; then
-            echo "Using key auth"
-            echo "$KEY" > ~/.ssh/id_deploy
-            chmod 600 ~/.ssh/id_deploy
-            rsync -avz --delete "${EXCLUDES[@]}" \
-              -e "ssh -i ~/.ssh/id_deploy -p ${SSH_PORT} -o StrictHostKeyChecking=no" \
-              . "${SSH_USER}@${SSH_HOST}:${DEST}"
-          else
-            echo "❌ Neither a valid SSH_KEY nor SSH_PASSWORD was provided." >&2
+          if [ -z "${{ secrets.SSH_KEY }}" ]; then
+            echo "❌ SSH_KEY secret is missing or empty. Create it in Repo Settings → Secrets (Actions) or point to the correct Environment."
             exit 1
           fi
 
-      - name: Activate release, link secrets, install & build (on server)
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          port: ${{ secrets.SSH_PORT }}
-          # permitimos password (tu caso); si más adelante pasas a clave, añade key: ${{ secrets.SSH_KEY }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          script: |
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.SSH_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Rsync repo to server
+        run: |
+          rsync -az --delete \
+            --exclude '.env' \
+            --exclude 'config/' \
+            -e "ssh -o StrictHostKeyChecking=no -i key.pem" ./ \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.SERVER_APP_DIR }}/
+
+      - name: Install & build & restart
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
             set -e
-            APP_DIR="${{ secrets.APP_DIR }}"
-            RELEASE_DIR="$APP_DIR/releases/${{ github.run_number }}"
-            CURRENT_LINK="$APP_DIR/current"
-
-            # Enlaza secretos mantenidos en el servidor
-            ln -sfn "$APP_DIR/config/config_game.json" "$RELEASE_DIR/config_game.json"
-            if [ -f "$APP_DIR/config/.env" ]; then
-              ln -sfn "$APP_DIR/config/.env" "$RELEASE_DIR/.env"
-            fi
-
-            cd "$RELEASE_DIR"
-            npm ci --omit=dev
-
-            # Ejecuta build SOLO si existe el script build en package.json
-            if node -e 'try{const p=require("./package.json"); process.exit(!(p.scripts && p.scripts.build)); }catch(e){process.exit(1)}'; then
-              npm run build
-            fi
-
-            # Apunta current a la nueva release (atómico)
-            ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
-
-      - name: Reload PM2
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          port: ${{ secrets.SSH_PORT }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          script: |
-            APP_DIR="${{ secrets.APP_DIR }}"
-            pm2 start "$APP_DIR/ecosystem.config.js" || true
-            pm2 reload Gamification || pm2 restart Gamification
+            cd "${{ secrets.SERVER_APP_DIR }}"
+            # Instala dependencias
+            npm ci
+            # Arranca/reinicia
+            pm2 describe gamification >/dev/null 2>&1 && pm2 restart gamification || pm2 start --name gamification node gamification.js
             pm2 save
+          EOF
