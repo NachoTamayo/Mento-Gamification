@@ -33,6 +33,7 @@ jobs:
           rsync -az --delete \
             --exclude '.env' \
             --exclude 'config/' \
+            --exclude 'bot.log' \
             -e "ssh -o StrictHostKeyChecking=no -i key.pem" ./ \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.SERVER_APP_DIR }}/
 
