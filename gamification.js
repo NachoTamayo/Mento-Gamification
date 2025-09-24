@@ -20,7 +20,7 @@ const {
   endPoint,
   access_key,
   awsdb,
-} = require("../config/config_game.json");
+} = require("./config/config_game.json");
 
 // Ruta del archivo donde se guardarán los logs
 const logFilePath = path.join(__dirname, "bot.log");
