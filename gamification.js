@@ -92,11 +92,18 @@ async function checkHonor(emisor, receptor, message) {
     log(`El honor de ${emisor.username} a ${receptor.username} no se concede por no tener un rol válido.`);
     honorable = false;
   }
+  const hasSpecialRole = receptorMember.roles.cache.some((role) => coachRoles.includes(role.id));
+  if (hasSpecialRole) {
+    // Los coach no pueden recibir honor
+    log(`El honor de ${emisor.username} a ${receptor.username} no se concede porque el receptor es coach.`);
+    honorable = false;
+  }
 
   if (message.content.length < 20) {
     log(`El honor de ${emisor.username} a ${receptor.username} no se concede por ser un mensaje muy corto.`);
     honorable = false;
   }
+  if (!honorable) return false;
 
   //Primero chequeamos si el emisor ha dado honor en los últimos 5 minutos
   let con;
@@ -221,8 +228,8 @@ async function addHonor(id, points, razon, emisor, receptor, mensaje, callback) 
   return callback(res.data, emisor, receptor, mensaje);
 }
 
-function buscarUsuario(id, callback) {
-  var query = `SELECT * FROM ${userTable} WHERE discord = ${id}`;
+function buscarUsuario(user, callback) {
+  var query = `SELECT * FROM ${userTable} WHERE discord in ('${user.id}', '${user.username}') LIMIT 1`;
   createQuery(query, callback);
 }
 
@@ -248,7 +255,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
   const hasSpecialRole = member.roles.cache.some((role) => coachRoles.includes(role.id));
 
   if (hasSpecialRole && reaction.emoji.id != reactions.honor) {
-    buscarUsuario(reaction.message.author.id, async (rows) => {
+    buscarUsuario(reaction.message.author, async (rows) => {
       let userId;
       if (rows.length > 0) {
         userId = rows[0].ID;
@@ -294,7 +301,7 @@ client.on("messageReactionAdd", async (reaction, user) => {
       });
     });
   } else if (reaction.emoji.id === reactions.honor && reaction.message.author.id != user.id) {
-    buscarUsuario(reaction.message.author.id, async (rows) => {
+    buscarUsuario(reaction.message.author, async (rows) => {
       let userId;
       if (rows.length > 0) {
         userId = rows[0].ID;
