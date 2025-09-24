@@ -42,8 +42,8 @@ jobs:
             set -e
             cd "${{ secrets.SERVER_APP_DIR }}"
             # Instala dependencias
-            npm ci
+            npm install
             # Arranca/reinicia
-            pm2 describe gamification >/dev/null 2>&1 && pm2 restart gamification || pm2 start --name gamification node gamification.js
+            pm2 describe Gamification >/dev/null 2>&1 && pm2 restart Gamification || pm2 start gamification.js --name Gamification
             pm2 save
           EOF
