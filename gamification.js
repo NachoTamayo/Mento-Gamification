@@ -254,6 +254,11 @@ client.on("messageReactionAdd", async (reaction, user) => {
 
   const hasSpecialRole = member.roles.cache.some((role) => coachRoles.includes(role.id));
 
+  if (reaction.message.channel.type === 11 && !hasSpecialRole && reaction.emoji.id != reactions.honor) {
+    await reaction.users.remove(user.id);
+    log(`Usuario ${user.username} intentó reaccionar en un canal de manos sin rol válido. Reacción eliminada.`);
+    return;
+  }
   if (hasSpecialRole && reaction.emoji.id != reactions.honor) {
     buscarUsuario(reaction.message.author, async (rows) => {
       let userId;
